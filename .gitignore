@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Netlify deploy folder — APKs are large binaries, deployed separately
+netlify-apk/*.apk

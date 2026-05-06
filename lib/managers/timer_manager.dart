@@ -4,6 +4,7 @@ class TimerManager {
   double _remaining = 0;
   double _slowMoRemaining = 0;
   bool _running = false;
+  bool _paused = false;
   Timer? _ticker;
   final void Function(double remaining) onTick;
   final void Function() onExpired;
@@ -12,6 +13,7 @@ class TimerManager {
 
   double get remaining => _remaining;
   bool get isRunning => _running;
+  bool get isSlowMoActive => _slowMoRemaining > 0;
 
   void start(double seconds) {
     _remaining = seconds;
@@ -20,8 +22,11 @@ class TimerManager {
     _ticker = Timer.periodic(const Duration(milliseconds: 100), _tick);
   }
 
+  void pause()  => _paused = true;
+  void resume() => _paused = false;
+
   void _tick(Timer t) {
-    if (!_running) return;
+    if (!_running || _paused) return;
     final speed = _slowMoRemaining > 0 ? 0.25 : 1.0;
     _remaining -= 0.1 * speed;
     if (_slowMoRemaining > 0) _slowMoRemaining -= 0.1;

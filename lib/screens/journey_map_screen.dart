@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import '../managers/audio_manager.dart';
+import '../managers/ad_manager.dart';
 import '../managers/progress_manager.dart';
 import '../theme/journey_themes.dart';
 
+const List<int> _kJourneyIds = [1, 2, 3];
+
 class JourneyMapScreen extends StatefulWidget {
   final void Function(int journeyId) onJourneySelected;
-  const JourneyMapScreen({super.key, required this.onJourneySelected});
+  final VoidCallback onBack;
+  const JourneyMapScreen({super.key, required this.onJourneySelected, required this.onBack});
 
   @override
   State<JourneyMapScreen> createState() => _JourneyMapScreenState();
@@ -12,38 +17,110 @@ class JourneyMapScreen extends StatefulWidget {
 
 class _JourneyMapScreenState extends State<JourneyMapScreen> {
   final _progress = ProgressManager();
+  final _audio = AudioManager();
+
+  @override
+  void initState() {
+    super.initState();
+    _audio.playLevelScreenMusic();
+  }
+
+  @override
+  void dispose() {
+    _audio.stopLevelScreenMusic();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D0D),
-      body: Column(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          const SafeArea(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('SELECT JOURNEY', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 4)),
+          // New portrait background
+          Image.asset(
+            'assets/images/backgrounds/levelselect_portrait.png',
+            fit: BoxFit.cover,
+            alignment: Alignment.center,
+            errorBuilder: (_, __, ___) => Image.asset(
+              'assets/images/level_screen_bg.png',
+              fit: BoxFit.cover,
             ),
           ),
-          Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              itemCount: kJourneys.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 20),
-              itemBuilder: (context, i) {
-                final journey = kJourneys[i];
-                final unlocked = _progress.isJourneyUnlocked(journey.id);
-                final highest = _progress.getHighestLevel(journey.id);
-                final bonfire = _progress.getBonfireLevel(journey.id);
-                return _JourneyNode(
-                  journey: journey,
-                  unlocked: unlocked,
-                  highestLevel: highest,
-                  bonfireLevel: bonfire,
-                  onTap: unlocked ? () => widget.onJourneySelected(journey.id) : null,
-                );
-              },
+          Container(color: Colors.black.withValues(alpha: 0.04)),
+
+          SafeArea(
+            child: Column(
+              children: [
+                // ── Back button (standalone, clear of background title) ──
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: GestureDetector(
+                      onTap: () {
+                        _audio.stopLevelScreenMusic();
+                        widget.onBack();
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: const Color(0xFFD4A76A).withValues(alpha: 0.6),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: const Icon(Icons.arrow_back_ios_new_rounded,
+                            color: Color(0xFFD4A76A), size: 18),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Push cards below the background logo art (≈38% of screen)
+                SizedBox(height: MediaQuery.of(context).size.height * 0.30),
+
+                // Section label above cards
+                const Padding(
+                  padding: EdgeInsets.only(left: 28, bottom: 8),
+                  child: Text(
+                    'CHOOSE JOURNEY',
+                    style: TextStyle(
+                      color: Color(0xFFD4A76A),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                      letterSpacing: 3,
+                    ),
+                  ),
+                ),
+
+                // ── Journey cards ──
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+                    itemCount: _kJourneyIds.length,
+                    itemBuilder: (ctx, i) {
+                      final id = _kJourneyIds[i];
+                      return _JourneyCard(
+                        journeyId: id,
+                        unlocked: _progress.isJourneyUnlocked(id),
+                        currentLevel: _progress.getCurrentLevel(id),
+                        highestLevel: _progress.getHighestLevel(id),
+                        onTap: () {
+                          _audio.stopLevelScreenMusic();
+                          widget.onJourneySelected(id);
+                        },
+                      );
+                    },
+                  ),
+                ),
+
+                // ── Ad banner pinned at bottom ──
+                const BannerAdWidget(),
+              ],
             ),
           ),
         ],
@@ -52,62 +129,167 @@ class _JourneyMapScreenState extends State<JourneyMapScreen> {
   }
 }
 
-class _JourneyNode extends StatelessWidget {
-  final JourneyTheme journey;
+class _JourneyCard extends StatelessWidget {
+  final int journeyId;
   final bool unlocked;
+  final int currentLevel;
   final int highestLevel;
-  final int bonfireLevel;
-  final VoidCallback? onTap;
+  final VoidCallback onTap;
 
-  const _JourneyNode({
-    required this.journey,
+  const _JourneyCard({
+    required this.journeyId,
     required this.unlocked,
+    required this.currentLevel,
     required this.highestLevel,
-    required this.bonfireLevel,
-    this.onTap,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = getJourneyTheme(journeyId);
+    final progress = (highestLevel / 10.0).clamp(0.0, 1.0);
+
     return GestureDetector(
-      onTap: onTap,
-      child: Opacity(
-        opacity: unlocked ? 1.0 : 0.4,
-        child: Container(
-          width: 180,
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1A1A),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: unlocked ? journey.primaryColor : const Color(0xFF333333),
-              width: 2,
-            ),
-            boxShadow: unlocked
-                ? [BoxShadow(color: journey.primaryColor.withOpacity(0.3), blurRadius: 16, spreadRadius: 1)]
-                : [],
+      onTap: unlocked ? onTap : null,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: unlocked
+              ? theme.bgColor.withValues(alpha: 0.88)
+              : Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: unlocked
+                ? theme.accentColor.withValues(alpha: 0.75)
+                : Colors.white12,
+            width: unlocked ? 2.0 : 1.0,
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          boxShadow: unlocked
+              ? [
+                  BoxShadow(
+                    color: theme.accentColor.withValues(alpha: 0.3),
+                    blurRadius: 20,
+                    spreadRadius: 1,
+                  )
+                ]
+              : [],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
             children: [
-              Text(journey.emoji, style: const TextStyle(fontSize: 40)),
-              const SizedBox(height: 8),
-              Text(journey.name.toUpperCase(), style: TextStyle(color: journey.accentColor, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 2)),
-              const SizedBox(height: 8),
-              if (!unlocked)
-                const Icon(Icons.lock, color: Colors.white38, size: 24)
-              else ...[
-                Text('Level $highestLevel / 13', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+              // Icon circle
+              Container(
+                width: 68,
+                height: 68,
+                decoration: BoxDecoration(
+                  color: unlocked
+                      ? theme.accentColor.withValues(alpha: 0.18)
+                      : Colors.white.withValues(alpha: 0.06),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: unlocked
+                        ? theme.accentColor.withValues(alpha: 0.5)
+                        : Colors.white12,
+                    width: 1.5,
+                  ),
+                ),
+                child: Center(
+                  child: unlocked
+                      ? _journeyIcon(journeyId)
+                      : const Icon(Icons.lock_rounded, color: Colors.white30, size: 28),
+                ),
+              ),
+
+              const SizedBox(width: 16),
+
+              // Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('🔥', style: TextStyle(fontSize: 12)),
-                    Text(' Bonfire L$bonfireLevel', style: const TextStyle(color: Colors.orange, fontSize: 11)),
+                    Text(
+                      theme.name.toUpperCase(),
+                      style: TextStyle(
+                        color: unlocked ? theme.accentColor : Colors.white30,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    if (unlocked) ...[
+                      Text(
+                        'Level $currentLevel / 10',
+                        style: TextStyle(
+                          color: theme.accentColor.withValues(alpha: 0.75),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          backgroundColor: Colors.white12,
+                          valueColor: AlwaysStoppedAnimation(theme.accentColor),
+                          minHeight: 5,
+                        ),
+                      ),
+                    ] else ...[
+                      Text(
+                        journeyId > 1
+                            ? 'Complete ${getJourneyTheme(journeyId - 1).name} to unlock'
+                            : 'Locked',
+                        style: TextStyle(
+                          color: theme.accentColor.withValues(alpha: 0.5),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ],
+                ),
+              ),
+
+              // Play button
+              if (unlocked) ...[
+                const SizedBox(width: 12),
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: theme.accentColor,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: theme.accentColor.withValues(alpha: 0.45),
+                        blurRadius: 14,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.play_arrow_rounded,
+                      color: Colors.white, size: 30),
                 ),
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _journeyIcon(int id) {
+    // Try to use journey icon image, fall back to emoji
+    return ClipOval(
+      child: Image.asset(
+        'assets/images/journey_icons/journey_$id.png',
+        width: 52,
+        height: 52,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Text(
+          getJourneyTheme(id).emoji,
+          style: const TextStyle(fontSize: 30),
         ),
       ),
     );

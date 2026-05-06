@@ -5,6 +5,7 @@ import 'managers/progress_manager.dart';
 import 'managers/ad_manager.dart';
 import 'managers/audio_manager.dart';
 import 'theme/journey_themes.dart';
+import 'screens/comic_intro_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/journey_map_screen.dart';
 import 'screens/level_map_screen.dart';
@@ -13,12 +14,16 @@ import 'screens/game_over_screen.dart';
 import 'screens/level_complete_screen.dart';
 import 'screens/journey_complete_screen.dart';
 import 'screens/bonfire_screen.dart';
+import 'managers/level_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+  await SystemChrome.setPreferredOrientations(
+      [DeviceOrientation.portraitUp]);
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   await ProgressManager().init();
   await AdManager().init();
+  await AudioManager().initAudio();
   runApp(const PileTileApp());
 }
 
@@ -28,7 +33,7 @@ class PileTileApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PileTile',
+      title: 'Tile Pile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(scaffoldBackgroundColor: Colors.black),
       home: const AppRouter(),
@@ -36,7 +41,10 @@ class PileTileApp extends StatelessWidget {
   }
 }
 
-enum Screen { home, journeyMap, levelMap, game, gameOver, levelComplete, bonfire, journeyComplete }
+enum Screen {
+  splash, home, journeyMap, levelMap, game, gameOver,
+  levelComplete, bonfire, journeyComplete
+}
 
 class AppRouter extends StatefulWidget {
   const AppRouter({super.key});
@@ -45,31 +53,64 @@ class AppRouter extends StatefulWidget {
   State<AppRouter> createState() => _AppRouterState();
 }
 
-class _AppRouterState extends State<AppRouter> {
-  Screen _screen = Screen.home;
+class _AppRouterState extends State<AppRouter> with WidgetsBindingObserver {
+  Screen _screen = ProgressManager().hasSeenIntro ? Screen.home : Screen.splash;
   int _journeyId = 1;
   int _level = 1;
   int _wrongTaps = 0;
   int _pairsCleared = 0;
   int _roundsSurvived = 0;
+  int _diedOnLevel = 1;
   int _diedOnRound = 1;
+  int _journeyMapKey = 0;
+
   final _progress = ProgressManager();
   final _audio = AudioManager();
 
-  void _goTo(Screen s) => setState(() => _screen = s);
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
 
-  Future<void> _onLevelComplete() async {
-    final ceiling = 5 + _level * 5;
-    _pairsCleared = ceiling;
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _audio.stopMenuMusic();
+      _audio.stopLevelScreenMusic();
+      _audio.stopGameMusic();
+    }
+  }
+
+  void _goTo(Screen s) => setState(() {
+        if (s == Screen.journeyMap) _journeyMapKey++;
+        _screen = s;
+      });
+
+  Future<void> _onLevelComplete(int wrongTaps) async {
+    _wrongTaps = wrongTaps;
+    final ceiling = LevelManager.pairCeiling(_level);
     _roundsSurvived = ceiling;
-    await _progress.saveHighestLevel(_journeyId, _level);
+    _pairsCleared = ceiling * (ceiling + 1) ~/ 2;
 
-    final randomBonfire = _progress.getRandomBonfireLevel(_journeyId);
-    if (isBonfireLevel(_journeyId, _level, randomBonfire)) {
+    final stars = wrongTaps == 0 ? 3 : (wrongTaps <= 3 ? 2 : 1);
+    await _progress.saveHighestLevel(_journeyId, _level);
+    await _progress.saveStars(_journeyId, _level, stars);
+
+    if (isBonfireLevel(_journeyId, _level)) {
       await _progress.saveBonfire(_journeyId, _level);
+      await _progress.addReviveStone();
       _audio.playBonfire();
       _goTo(Screen.bonfire);
-    } else if (_level >= 13) {
+    } else if (_level >= 10) {
+      await _progress.addReviveStone();
       _audio.playLevelUp();
       _goTo(Screen.journeyComplete);
     } else {
@@ -78,11 +119,14 @@ class _AppRouterState extends State<AppRouter> {
     }
   }
 
-  Future<void> _onSuddenDeath() async {
-    _diedOnRound = _level;
+  Future<void> _onSuddenDeath(int round) async {
+    _audio.stopGameMusic();
+    _diedOnLevel = _level;
+    _diedOnRound = round;
     final bonfire = _progress.getBonfireLevel(_journeyId);
     final dropTo = max(bonfire, 1);
     await _progress.saveCurrentLevel(_journeyId, dropTo);
+    _level = dropTo;
     _audio.playDrop();
 
     final showAd = AdManager().shouldShowAd;
@@ -96,30 +140,30 @@ class _AppRouterState extends State<AppRouter> {
 
   Widget _buildScreen() {
     switch (_screen) {
+      case Screen.splash:
+        return ComicIntroScreen(onDone: () => _goTo(Screen.home));
+
       case Screen.home:
-        return HomeScreen(onPlay: () => _goTo(Screen.journeyMap));
+        return HomeScreen(
+          onPlay: () => _goTo(Screen.journeyMap),
+          onStory: () => _goTo(Screen.splash),
+        );
 
       case Screen.journeyMap:
-        return JourneyMapScreen(onJourneySelected: (id) {
-          _journeyId = id;
-          if (id >= 3) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('${getJourneyTheme(id).name} coming soon!'),
-                backgroundColor: Colors.black87,
-                duration: const Duration(seconds: 2),
-              ),
-            );
-            return;
-          }
-          _level = _progress.getCurrentLevel(_journeyId);
-          if (_journeyId == 9) _ensureRandomBonfire();
-          _goTo(Screen.levelMap);
-        });
+        return JourneyMapScreen(
+          key: ValueKey(_journeyMapKey),
+          onBack: () => _goTo(Screen.home),
+          onJourneySelected: (id) {
+            _journeyId = id;
+            _level = _progress.getCurrentLevel(_journeyId);
+            _goTo(Screen.levelMap);
+          },
+        );
 
       case Screen.levelMap:
         return LevelMapScreen(
           journeyId: _journeyId,
+          onBack: () => _goTo(Screen.journeyMap),
           onLevelSelected: (jId, lvl) {
             _journeyId = jId;
             _level = lvl;
@@ -130,9 +174,14 @@ class _AppRouterState extends State<AppRouter> {
 
       case Screen.game:
         return GameScreen(
-          key: ValueKey('game-$_journeyId-$_level-${DateTime.now().millisecondsSinceEpoch}'),
+          key: ValueKey(
+              'game-$_journeyId-$_level-${DateTime.now().millisecondsSinceEpoch}'),
           journeyId: _journeyId,
           level: _level,
+          onBack: () {
+            _audio.stopGameMusic();
+            _goTo(Screen.levelMap);
+          },
           onSuddenDeath: _onSuddenDeath,
           onLevelComplete: _onLevelComplete,
         );
@@ -141,7 +190,7 @@ class _AppRouterState extends State<AppRouter> {
         final bonfire = _progress.getBonfireLevel(_journeyId);
         return GameOverScreen(
           diedOnRound: _diedOnRound,
-          diedOnLevel: _level,
+          diedOnLevel: _diedOnLevel,
           droppingToLevel: _level,
           bonfireLevel: bonfire,
           onContinue: () {
@@ -170,7 +219,7 @@ class _AppRouterState extends State<AppRouter> {
           journeyId: _journeyId,
           level: _level,
           onRest: () {
-            if (_level >= 13) {
+            if (_level >= 10) {
               _goTo(Screen.journeyComplete);
             } else {
               _level++;
@@ -189,18 +238,10 @@ class _AppRouterState extends State<AppRouter> {
     }
   }
 
-  void _ensureRandomBonfire() {
-    if (_progress.getRandomBonfireLevel(_journeyId) == null) {
-      final rng = Random();
-      final lvl = 2 + rng.nextInt(11);
-      _progress.setRandomBonfireLevel(_journeyId, lvl);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: _screen == Screen.home,
+      canPop: _screen == Screen.home || _screen == Screen.splash,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_screen == Screen.game) {

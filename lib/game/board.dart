@@ -11,13 +11,25 @@ class Board {
   int? selectedCol;
   int? selectedRow;
 
-  Board({this.columns = 8, this.rows = 5}) {
+  List<(int, int)> _validPositions = [];
+
+  Board({this.columns = 8, this.rows = 4}) {
     grid = List.generate(rows, (_) => List.generate(columns, (_) => TileStack()));
+  }
+
+  void setValidPositions(List<(int, int)> positions) {
+    _validPositions = positions;
+  }
+
+  bool isValidPosition(int col, int row) {
+    if (_validPositions.isEmpty) return col < columns && row < rows;
+    return _validPositions.any((p) => p.$1 == col && p.$2 == row);
   }
 
   TileStack stackAt(int col, int row) => grid[row][col];
 
   List<(int, int)> get allPositions {
+    if (_validPositions.isNotEmpty) return List.from(_validPositions);
     final positions = <(int, int)>[];
     for (int r = 0; r < rows; r++) {
       for (int c = 0; c < columns; c++) {
@@ -28,7 +40,8 @@ class Board {
   }
 
   (int, int) randomPosition(Random rng) {
-    return (rng.nextInt(columns), rng.nextInt(rows));
+    final positions = allPositions;
+    return positions[rng.nextInt(positions.length)];
   }
 
   void placeTile(Tile tile, int col, int row) {
@@ -37,18 +50,19 @@ class Board {
 
   List<(int, int, Tile)> get tappableTiles {
     final result = <(int, int, Tile)>[];
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < columns; c++) {
-        final top = grid[r][c].top;
-        if (top != null && !top.isFrosted && !top.isMatched) {
-          result.add((c, r, top));
-        }
+    for (final pos in allPositions) {
+      final top = grid[pos.$2][pos.$1].top;
+      if (top != null && !top.isFrosted && !top.isMatched) {
+        result.add((pos.$1, pos.$2, top));
       }
     }
     return result;
   }
 
-  bool trySelectOrMatch(int col, int row, {required void Function(Tile, Tile) onMatch, required void Function(Tile) onWrongTap}) {
+  bool trySelectOrMatch(int col, int row,
+      {required void Function(Tile, Tile) onMatch,
+      required void Function(Tile) onWrongTap}) {
+    if (!isValidPosition(col, row)) return false;
     final stack = stackAt(col, row);
     final top = stack.top;
     if (top == null || top.isFrosted || top.isMatched) return false;
@@ -71,7 +85,8 @@ class Board {
       return false;
     }
 
-    final isMatch = wildcardActive || (prev.pairId == top.pairId && prev.colorIndex == top.colorIndex);
+    final isMatch =
+        wildcardActive || (prev.pairId == top.pairId && prev.colorIndex == top.colorIndex);
 
     if (isMatch) {
       prev.isMatched = true;
@@ -94,41 +109,58 @@ class Board {
   }
 
   bool get allMatched {
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < columns; c++) {
-        if (!grid[r][c].isEmpty) return false;
-      }
+    for (final pos in allPositions) {
+      if (!grid[pos.$2][pos.$1].isEmpty) return false;
     }
     return true;
   }
 
+  int get tileCount {
+    int count = 0;
+    for (final pos in allPositions) {
+      count += grid[pos.$2][pos.$1].length;
+    }
+    return count;
+  }
+
   void collapseAllToSingleLayer() {
+    final positions = allPositions;
     final allTiles = <Tile>[];
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < columns; c++) {
-        final stack = grid[r][c];
-        while (!stack.isEmpty) {
-          final t = stack.pop();
-          if (t != null) allTiles.add(t);
-        }
+    for (final pos in positions) {
+      final stack = grid[pos.$2][pos.$1];
+      while (!stack.isEmpty) {
+        final t = stack.pop();
+        if (t != null) allTiles.add(t);
       }
     }
     final rng = Random();
     allTiles.shuffle(rng);
-    int idx = 0;
-    for (int r = 0; r < rows && idx < allTiles.length; r++) {
-      for (int c = 0; c < columns && idx < allTiles.length; c++) {
-        grid[r][c].push(allTiles[idx++]);
+
+    // Place tiles back ensuring same-pair tiles never share a cell.
+    // Without this check, both tiles of a pair can land on the same position,
+    // making them impossible to match (tapping the same cell twice deselects).
+    final cellTopPairId = List<int?>.filled(positions.length, null);
+    for (int i = 0; i < allTiles.length; i++) {
+      final tile = allTiles[i];
+      int idx = i % positions.length;
+      if (cellTopPairId[idx] == tile.pairId) {
+        for (int d = 1; d < positions.length; d++) {
+          final alt = (idx + d) % positions.length;
+          if (cellTopPairId[alt] != tile.pairId) {
+            idx = alt;
+            break;
+          }
+        }
       }
+      grid[positions[idx].$2][positions[idx].$1].push(tile);
+      cellTopPairId[idx] = tile.pairId;
     }
   }
 
   void scrambleBuriedTiles(int count) {
     final buried = <(int, int)>[];
-    for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < columns; c++) {
-        if (grid[r][c].length > 1) buried.add((c, r));
-      }
+    for (final pos in allPositions) {
+      if (grid[pos.$2][pos.$1].length > 1) buried.add(pos);
     }
     if (buried.length < 2) return;
     final rng = Random();
