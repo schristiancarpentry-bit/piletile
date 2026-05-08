@@ -109,6 +109,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _audio.stopGameMusic();
     _shimmerCtrl.dispose();
     _reviveTimer?.cancel();
     super.dispose();

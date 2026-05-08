@@ -101,7 +101,7 @@ class AudioManager {
     final files = {1: 'bedrock'};
     final name = files[journeyId];
     if (name == null) return;
-    if (_currentGameTrack == name) return; // already playing — skip stop/restart
+    if (_currentGameTrack == name && _gamePlayer.state == PlayerState.playing) return;
     _currentGameTrack = name;
     try { await _gamePlayer.stop(); } catch (_) {}
     try { await _gamePlayer.setReleaseMode(ReleaseMode.loop); } catch (_) {}

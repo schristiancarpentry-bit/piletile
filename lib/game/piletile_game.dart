@@ -240,6 +240,7 @@ class PileTileGame extends FlameGame with TapCallbacks {
   // Particles (shared, capped at 30)
   final List<_Particle> _particles = [];
   final List<_StarParticle> _starParticles = [];
+  final List<_Particle> _snowParticles = [];
   final List<_ShockRing> _rings = [];
   final List<_ScreenFlash> _flashes = [];
   final List<_FloatingText> _floatingTexts = [];
@@ -373,6 +374,7 @@ class PileTileGame extends FlameGame with TapCallbacks {
       onLevelComplete(_wrongTaps);
       return;
     }
+    _audio.playGameMusic(journeyId); // nudge: restarts only if music silently stopped
     _phase = GamePhase.dropping;
     onPhaseChange(GamePhase.dropping,
         {'round': _currentRound, 'ceiling': pairCeiling});
@@ -510,19 +512,22 @@ class PileTileGame extends FlameGame with TapCallbacks {
     final midX = (ax + bx) / 2;
     final midY = (ay + by) / 2;
 
-    // Special tile effects (hourglass, star, chaos)
-    if (a.isSpecial && a.specialId != null) {
-      _triggerSpecial(a.specialId!, midX, midY);
+    // Special tile effects (hourglass, star, chaos) — check both tiles
+    final specialTile = a.isSpecial ? a : (b.isSpecial ? b : null);
+    if (specialTile?.specialId != null) {
+      _triggerSpecial(specialTile!.specialId!, midX, midY);
     }
 
-    // Bad tile effects (skull, scramble)
-    if (a.isBad && a.badId != null) {
-      _triggerBad(a.badId!, midX, midY);
+    // Bad tile effects (skull, scramble) — check both tiles
+    final badTile = a.isBad ? a : (b.isBad ? b : null);
+    if (badTile?.badId != null) {
+      _triggerBad(badTile!.badId!, midX, midY);
     }
 
     // Bad tiles crumble — pile shakes harder
-    if (a.isBad) {
-      if (a.badId == BadTileId.skull) {
+    final isBadMatch = a.isBad || b.isBad;
+    if (isBadMatch) {
+      if (a.badId == BadTileId.skull || b.badId == BadTileId.skull) {
         _skullRushes.add(_SkullRush(x: ax, y: ay));
         _skullRushes.add(_SkullRush(x: bx, y: by));
         _audio.playSkullLaugh();
@@ -775,22 +780,24 @@ class PileTileGame extends FlameGame with TapCallbacks {
   }
 
   void _doFreeze() {
-    final tops = <(int, int)>[];
-    for (int r = 0; r < _kPyramidCols.length; r++) {
-      for (final c in _kPyramidCols[r]) {
-        final stack = _board.stackAt(c, r);
-        if (stack.top != null && !stack.top!.isFrosted) tops.add((c, r));
-      }
-    }
-    if (tops.isEmpty) return;
-    tops.shuffle(_rng);
-    final count = level >= 5 ? 3 : (1 + _rng.nextInt(2));
-    for (int i = 0; i < count && i < tops.length; i++) {
-      final tile = _board.stackAt(tops[i].$1, tops[i].$2).top;
-      if (tile == null) continue;
-      tile.isFrosted = true;
-      _audio.playFreeze();
-      _after(3000, () => tile.isFrosted = false);
+    // blizzard gust: snowflakes sweep across the screen as a visual distraction
+    _flashes.add(_ScreenFlash(const Color(0xFF88CCFF), 0.2));
+    _audio.playFreeze();
+    const snowColors = [
+      Color(0xFFCCEEFF), Color(0xFFDDF0FF), Color(0xFFFFFFFF), Color(0xFFAADDFF),
+    ];
+    for (int i = 0; i < 28; i++) {
+      _after(i * 40, () {
+        _snowParticles.add(_Particle(
+          x: -20 + _rng.nextDouble() * size.x * 0.25,
+          y: topInset + _rng.nextDouble() * (_pileZoneTop - topInset),
+          vx: 260 + _rng.nextDouble() * 180,
+          vy: (_rng.nextDouble() - 0.3) * 45,
+          life: 1.0 + _rng.nextDouble() * 0.5,
+          size: 2.5 + _rng.nextDouble() * 3.5,
+          color: snowColors[_rng.nextInt(snowColors.length)],
+        ));
+      });
     }
   }
 
@@ -1013,6 +1020,15 @@ class PileTileGame extends FlameGame with TapCallbacks {
       if (p.life <= 0) _starParticles.removeAt(i);
     }
 
+    // Snow particles (constant velocity, fade out)
+    for (int i = _snowParticles.length - 1; i >= 0; i--) {
+      final p = _snowParticles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= dt * 0.9;
+      if (p.life <= 0 || p.x > size.x + 20) _snowParticles.removeAt(i);
+    }
+
     // Shock rings
     for (int i = _rings.length - 1; i >= 0; i--) {
       _rings[i].radius += 300 * dt;
@@ -1122,6 +1138,7 @@ class PileTileGame extends FlameGame with TapCallbacks {
     _drawRings(canvas);
     _drawParticles(canvas);
     _drawStarParticles(canvas);
+    _drawSnowParticles(canvas);
     _drawScorePops(canvas);
     _drawFloatingTexts(canvas);
     _drawSkullRushes(canvas);
@@ -1374,6 +1391,17 @@ class PileTileGame extends FlameGame with TapCallbacks {
         Offset(p.x, p.y),
         p.size * p.life.clamp(0, 1),
         Paint()..color = p.color.withValues(alpha: p.life.clamp(0, 1)),
+      );
+    }
+  }
+
+  void _drawSnowParticles(Canvas canvas) {
+    for (final p in _snowParticles) {
+      final alpha = p.life.clamp(0.0, 1.0);
+      canvas.drawCircle(
+        Offset(p.x, p.y),
+        p.size,
+        Paint()..color = p.color.withValues(alpha: alpha),
       );
     }
   }
@@ -1659,13 +1687,6 @@ class PileTileGame extends FlameGame with TapCallbacks {
         ..strokeWidth = 2.0);
     }
 
-    if (tile.isFrosted) {
-      canvas.drawRRect(rrect, Paint()..color = const Color(0x558BB8D4));
-      canvas.drawRRect(rrect, Paint()
-        ..color = const Color(0xFF88CCFF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5);
-    }
   }
 
   // ─── Symbol paths (unchanged) ──────────────────────────────────────────────
